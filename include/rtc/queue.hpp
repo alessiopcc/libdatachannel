@@ -41,10 +41,10 @@ public:
 	bool empty() const;
 	size_t size() const;   // elements
 	size_t amount() const; // amount
-	void push(const T &element);
-	void push(T &&element);
+	void push(T element);
 	std::optional<T> pop();
 	std::optional<T> peek();
+	std::optional<T> exchange(T element);
 	void wait();
 	void wait(const std::chrono::milliseconds &duration);
 
@@ -88,9 +88,7 @@ template <typename T> size_t Queue<T>::amount() const {
 	return mAmount;
 }
 
-template <typename T> void Queue<T>::push(const T &element) { push(T{element}); }
-
-template <typename T> void Queue<T>::push(T &&element) {
+template <typename T> void Queue<T>::push(T element) {
 	std::unique_lock lock(mMutex);
 	mPushCondition.wait(lock, [this]() { return !mLimit || mQueue.size() < mLimit || mStopping; });
 	if (!mStopping) {
@@ -117,6 +115,16 @@ template <typename T> std::optional<T> Queue<T>::peek() {
 	std::unique_lock lock(mMutex);
 	if (!mQueue.empty()) {
 		return std::optional<T>{mQueue.front()};
+	} else {
+		return nullopt;
+	}
+}
+
+template <typename T> std::optional<T> Queue<T>::exchange(T element) {
+	std::unique_lock lock(mMutex);
+	if (!mQueue.empty()) {
+		std::swap(mQueue.front(), element);
+		return std::optional<T>{element};
 	} else {
 		return nullopt;
 	}
