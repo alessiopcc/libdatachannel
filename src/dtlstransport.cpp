@@ -75,7 +75,7 @@ DtlsTransport::DtlsTransport(shared_ptr<IceTransport> lower, shared_ptr<Certific
 		const char *priorities = "SECURE128:-VERS-SSL3.0:-ARCFOUR-128:-COMP-ALL:+COMP-NULL";
 		const char *err_pos = NULL;
 		check_gnutls(gnutls_priority_set_direct(mSession, priorities, &err_pos),
-		             "Unable to set TLS priorities");
+		             "Failed to set TLS priorities");
 
 		check_gnutls(
 		    gnutls_credentials_set(mSession, GNUTLS_CRD_CERTIFICATE, mCertificate->credentials()));
@@ -332,7 +332,7 @@ void DtlsTransport::GlobalInit() {
 	if (!BioMethods) {
 		BioMethods = BIO_meth_new(BIO_TYPE_BIO, "DTLS writer");
 		if (!BioMethods)
-			throw std::runtime_error("Unable to BIO methods for DTLS writer");
+			throw std::runtime_error("Failed to create BIO methods for DTLS writer");
 		BIO_meth_set_create(BioMethods, BioMethodNew);
 		BIO_meth_set_destroy(BioMethods, BioMethodFree);
 		BIO_meth_set_write(BioMethods, BioMethodWrite);
@@ -353,10 +353,10 @@ DtlsTransport::DtlsTransport(shared_ptr<IceTransport> lower, shared_ptr<Certific
 	GlobalInit();
 
 	if (!(mCtx = SSL_CTX_new(DTLS_method())))
-		throw std::runtime_error("Unable to create SSL context");
+		throw std::runtime_error("Failed to create SSL context");
 
 	check_openssl(SSL_CTX_set_cipher_list(mCtx, "ALL:!LOW:!EXP:!RC4:!MD5:@STRENGTH"),
-	              "Unable to set SSL priorities");
+	              "Failed to set SSL priorities");
 
 	// RFC 8261: SCTP performs segmentation and reassembly based on the path MTU.
 	// Therefore, the DTLS layer MUST NOT use any compression algorithm.
@@ -377,7 +377,7 @@ DtlsTransport::DtlsTransport(shared_ptr<IceTransport> lower, shared_ptr<Certific
 	check_openssl(SSL_CTX_check_private_key(mCtx), "SSL local private key check failed");
 
 	if (!(mSsl = SSL_new(mCtx)))
-		throw std::runtime_error("Unable to create SSL instance");
+		throw std::runtime_error("Failed to create SSL instance");
 
 	SSL_set_ex_data(mSsl, TransportExIndex, this);
 	SSL_set_mtu(mSsl, 1280 - 40 - 8); // min MTU over UDP/IPv6
@@ -388,7 +388,7 @@ DtlsTransport::DtlsTransport(shared_ptr<IceTransport> lower, shared_ptr<Certific
 		SSL_set_accept_state(mSsl);
 
 	if (!(mInBio = BIO_new(BIO_s_mem())) || !(mOutBio = BIO_new(BioMethods)))
-		throw std::runtime_error("Unable to create BIO");
+		throw std::runtime_error("Failed to create BIO");
 
 	BIO_set_mem_eof_return(mInBio, BIO_EOF);
 	BIO_set_data(mOutBio, this);
@@ -430,9 +430,7 @@ bool DtlsTransport::send(message_ptr message) {
 	PLOG_VERBOSE << "Send size=" << message->size();
 
 	int ret = SSL_write(mSsl, message->data(), message->size());
-	if (!check_openssl_ret(mSsl, ret))
-		return false;
-	return true;
+	return check_openssl_ret(mSsl, ret);
 }
 
 void DtlsTransport::incoming(message_ptr message) {
@@ -463,23 +461,16 @@ void DtlsTransport::runRecvLoop() {
 			if (!check_openssl_ret(mSsl, ret))
 				break;
 
-			auto decrypted = ret > 0 ? make_message(buffer, buffer + ret) : nullptr;
+			if (mState == State::Connecting && SSL_is_init_finished(mSsl)) {
+				changeState(State::Connected);
 
-			if (mState == State::Connecting) {
-				if (unsigned long err = ERR_get_error())
-					throw std::runtime_error("handshake failed: " + openssl_error_string(err));
-
-				if (SSL_is_init_finished(mSsl)) {
-					changeState(State::Connected);
-
-					// RFC 8261: DTLS MUST support sending messages larger than the current path MTU
-					// See https://tools.ietf.org/html/rfc8261#section-5
-					SSL_set_mtu(mSsl, maxMtu + 1);
-				}
+				// RFC 8261: DTLS MUST support sending messages larger than the current path MTU
+				// See https://tools.ietf.org/html/rfc8261#section-5
+				SSL_set_mtu(mSsl, maxMtu + 1);
 			}
 
-			if (decrypted)
-				recv(decrypted);
+			if (ret > 0)
+				recv(make_message(buffer, buffer + ret));
 		}
 	} catch (const std::exception &e) {
 		PLOG_ERROR << "DTLS recv: " << e.what();
@@ -490,7 +481,7 @@ void DtlsTransport::runRecvLoop() {
 		changeState(State::Disconnected);
 		recv(nullptr);
 	} else {
-		PLOG_INFO << "DTLS handshake failed";
+		PLOG_ERROR << "DTLS handshake failed";
 		changeState(State::Failed);
 	}
 }
@@ -512,9 +503,9 @@ void DtlsTransport::InfoCallback(const SSL *ssl, int where, int ret) {
 	    static_cast<DtlsTransport *>(SSL_get_ex_data(ssl, DtlsTransport::TransportExIndex));
 
 	if (where & SSL_CB_ALERT) {
-		if (ret != 256) { // Close Notify
+		if (ret != 256) // Close Notify
 			PLOG_ERROR << "DTLS alert: " << SSL_alert_desc_string_long(ret);
-		}
+
 		t->mIncomingQueue.stop(); // Close the connection
 	}
 }
