@@ -121,6 +121,8 @@ void TlsTransport::incoming(message_ptr message) {
 void TlsTransport::runRecvLoop() {
 	const size_t bufferSize = 4096;
 
+	changeState(State::Connecting);
+
 	// Handshake loop
 	try {
 		int ret;
@@ -131,8 +133,11 @@ void TlsTransport::runRecvLoop() {
 
 	} catch (const std::exception &e) {
 		PLOG_ERROR << "TLS handshake: " << e.what();
+		changeState(State::Failed);
 		return;
 	}
+
+	changeState(State::Connected);
 
 	// Receive loop
 	try {
@@ -159,12 +164,12 @@ void TlsTransport::runRecvLoop() {
 				recv(make_message(b, b + ret));
 			}
 		}
-
 	} catch (const std::exception &e) {
 		PLOG_ERROR << "TLS recv: " << e.what();
 	}
 
 	PLOG_INFO << "TLS disconnected";
+	changeState(State::Disconnected);
 	recv(nullptr);
 }
 
