@@ -102,8 +102,8 @@ void PeerConnection::setLocalDescription(Description description) {
 		// See https://tools.ietf.org/html/rfc5763#section-5
 		iceTransport = initIceTransport(Description::Role::ActPass);
 		Description localDescription = iceTransport->getLocalDescription(Description::Type::Offer);
-		localDescription.addMedia(description); // TODO
-		processLocalDescription(description);
+		localDescription.addMedia(description);
+		processLocalDescription(localDescription);
 		iceTransport->gatherLocalCandidates();
 	}
 }
@@ -123,7 +123,9 @@ void PeerConnection::setRemoteDescription(Description description) {
 
 	if (mRemoteDescription->type() == Description::Type::Offer) {
 		// This is an offer and we are the answerer.
-		processLocalDescription(iceTransport->getLocalDescription(Description::Type::Answer));
+		Description localDescription = iceTransport->getLocalDescription(Description::Type::Answer);
+		localDescription.addMedia(description); // blindly accept media
+		processLocalDescription(localDescription);
 		iceTransport->gatherLocalCandidates();
 	} else {
 		// This is an answer and we are the offerer.
